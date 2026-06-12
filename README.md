@@ -12,6 +12,44 @@ The text used for the Cards against Containers questions can be found in [questi
 
 The text used for the Cards against Containers answers can be found in [answers.txt](./answers.txt)
 
+### Web App Local Development
+
+This repository now includes a static TypeScript web app for local pass-and-play games.
+
+Install dependencies:
+
+```sh
+npm install
+```
+
+Start a local development server:
+
+```sh
+npm run dev
+```
+
+Build the static app:
+
+```sh
+npm run build
+```
+
+Run tests:
+
+```sh
+npm test
+```
+
+Preview the built app locally:
+
+```sh
+npm run preview
+```
+
+The development and preview servers only serve static frontend assets. There is no server-side game component.
+
+The app also includes an early peer-to-peer connection panel. Use the `P2P` button in two browser tabs or devices to exchange a host offer and guest answer manually, then confirm the WebRTC data channel with a short message.
+
 ### Contributing Cards
 
 You can open up a pull request directly to this repository, or you can open an issue in the [issue tracker](https://github.com/cardsagainstcontainers/deck/issues)
