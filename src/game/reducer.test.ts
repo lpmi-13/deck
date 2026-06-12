@@ -121,4 +121,19 @@ describe("game reducer", () => {
       "unique"
     );
   });
+
+  it("rejects out-of-turn submissions", () => {
+    const game = createGame({
+      players: ["Ada", "Grace", "Linus", "Margaret"],
+      decks: [testDeck],
+      targetScore: 3,
+      handSize: 5,
+      seed: 1
+    });
+    const outOfTurnPlayer = game.players.find(
+      (player) => player.id !== game.round?.judgeId && player.id !== game.round?.activePlayerId
+    );
+
+    expect(() => submitCards(game, outOfTurnPlayer!.id, [outOfTurnPlayer!.hand[0].id])).toThrow("turn");
+  });
 });

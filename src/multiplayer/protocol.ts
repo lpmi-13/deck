@@ -133,6 +133,7 @@ export function isGameSummaryMessage(message: PeerMessage): message is PeerMessa
   const payload = message.payload as Partial<GameSummaryPayload> | null;
   return (
     message.type === "game-summary" &&
+    payload !== null &&
     isVersionedPayload(payload) &&
     typeof payload.gameId === "string" &&
     Array.isArray(payload.players)
@@ -143,6 +144,7 @@ export function isPlayerViewMessage(message: PeerMessage): message is PeerMessag
   const payload = message.payload as Partial<PlayerViewPayload> | null;
   return (
     message.type === "player-view" &&
+    payload !== null &&
     isVersionedPayload(payload) &&
     typeof payload.viewerPlayerId === "string" &&
     Array.isArray(payload.hand) &&
@@ -164,13 +166,19 @@ export function isPlayerViewRequestMessage(
   message: PeerMessage
 ): message is PeerMessage<PlayerViewRequestPayload> {
   const payload = message.payload as Partial<PlayerViewRequestPayload> | null;
-  return message.type === "player-view-request" && isVersionedPayload(payload) && typeof payload.playerId === "string";
+  return (
+    message.type === "player-view-request" &&
+    payload !== null &&
+    isVersionedPayload(payload) &&
+    typeof payload.playerId === "string"
+  );
 }
 
 export function isSubmitCardsMessage(message: PeerMessage): message is PeerMessage<SubmitCardsPayload> {
   const payload = message.payload as Partial<SubmitCardsPayload> | null;
   return (
     message.type === "submit-cards" &&
+    payload !== null &&
     isVersionedPayload(payload) &&
     typeof payload.playerId === "string" &&
     Array.isArray(payload.cardIds)
@@ -181,6 +189,7 @@ export function isPickWinnerMessage(message: PeerMessage): message is PeerMessag
   const payload = message.payload as Partial<PickWinnerPayload> | null;
   return (
     message.type === "pick-winner" &&
+    payload !== null &&
     isVersionedPayload(payload) &&
     typeof payload.submissionIndex === "number"
   );
@@ -231,6 +240,6 @@ function toPublicPlayer(player: Player): PublicPlayer {
   };
 }
 
-function isVersionedPayload(payload: unknown): payload is { version: typeof MULTIPLAYER_PROTOCOL_VERSION } {
+function isVersionedPayload(payload: unknown): boolean {
   return Boolean(payload) && (payload as { version?: number }).version === MULTIPLAYER_PROTOCOL_VERSION;
 }

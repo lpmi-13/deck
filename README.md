@@ -14,7 +14,7 @@ The text used for the Cards against Containers answers can be found in [answers.
 
 ### Web App Local Development
 
-This repository now includes a static TypeScript web app for local pass-and-play games.
+This repository now includes a static TypeScript web app for local pass-and-play games and early peer-to-peer multi-device games.
 
 Install dependencies:
 
@@ -48,7 +48,7 @@ npm run preview
 
 The development and preview servers only serve static frontend assets. There is no server-side game component.
 
-The app also includes an early peer-to-peer connection panel. Use the `P2P` button in two browser tabs or devices to exchange a host offer and guest answer manually, then confirm the WebRTC data channel with a short message.
+When starting a game, choose either `Single device` or `Multi-device`. Single-device games use the pass-and-play flow on one screen. Multi-device games use the current browser as the host and the `P2P` panel to connect guests over WebRTC. The host can create one guest connection per remote player; each guest exchanges a host offer and guest answer manually, requests their player view, and then submits cards or judges through the data channel.
 
 ### Contributing Cards
 

@@ -92,6 +92,10 @@ export function submitCards(state: GameState, playerId: string, cardIds: string[
     throw new Error("The judge cannot submit cards.");
   }
 
+  if (state.round.activePlayerId !== playerId) {
+    throw new Error("It is not this player's turn.");
+  }
+
   if (state.round.submissions.some((submission) => submission.playerId === playerId)) {
     throw new Error("This player has already submitted.");
   }

@@ -23,6 +23,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -178,6 +179,7 @@ legend {
 input[type="text"],
 input[type="number"],
 input:not([type]),
+select,
 textarea {
   width: 100%;
   padding: 10px 12px;
@@ -189,7 +191,8 @@ textarea {
 
 input[type="text"],
 input[type="number"],
-input:not([type]) {
+input:not([type]),
+select {
   min-height: 42px;
 }
 
@@ -202,7 +205,8 @@ textarea {
   max-width: 180px;
 }
 
-.deck-option {
+.deck-option,
+.mode-option {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   gap: 10px;
@@ -213,9 +217,21 @@ textarea {
   border-radius: 8px;
 }
 
-.deck-option span {
+.deck-option span,
+.mode-option span {
   display: grid;
   gap: 2px;
+}
+
+.mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mode-option.is-selected {
+  border-color: rgba(12, 123, 96, 0.55);
+  box-shadow: inset 4px 0 0 #0c7b60;
 }
 
 .deck-summary {
@@ -314,12 +330,14 @@ textarea {
 }
 
 .question-card,
+.remote-question,
 .answer-card,
 .submission-card {
   border-radius: 8px;
 }
 
-.question-card {
+.question-card,
+.remote-question {
   display: grid;
   gap: 18px;
   min-height: 230px;
@@ -329,11 +347,21 @@ textarea {
   box-shadow: 0 18px 42px rgba(24, 33, 31, 0.22);
 }
 
-.question-card p {
+.question-card p,
+.remote-question p {
   max-width: 760px;
   font-size: clamp(1.65rem, 4vw, 3.6rem);
   font-weight: 900;
   line-height: 1.02;
+}
+
+.remote-question {
+  min-height: 180px;
+  margin-top: 12px;
+}
+
+.remote-question p {
+  font-size: clamp(1.35rem, 3vw, 2.5rem);
 }
 
 .card-label,
@@ -446,6 +474,25 @@ textarea {
   gap: 16px;
 }
 
+.host-peers {
+  display: grid;
+  gap: 14px;
+}
+
+.host-peer-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid rgba(24, 33, 31, 0.12);
+  border-radius: 8px;
+}
+
+.host-peer-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .signal-field {
   display: grid;
   gap: 10px;
@@ -505,6 +552,20 @@ textarea {
   border-radius: 8px;
 }
 
+.guest-game,
+.remote-view,
+.remote-action {
+  display: grid;
+  gap: 14px;
+}
+
+.guest-selector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
 .remote-game-grid {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -514,6 +575,11 @@ textarea {
 
 .remote-game-grid strong {
   color: #18211f;
+}
+
+.muted-copy {
+  margin: 0;
+  color: #63716c;
 }
 
 @media (max-width: 860px) {
@@ -537,7 +603,9 @@ textarea {
 
   .setup-layout,
   .game-layout,
-  .signal-grid {
+  .signal-grid,
+  .mode-options,
+  .guest-selector {
     grid-template-columns: 1fr;
   }
 

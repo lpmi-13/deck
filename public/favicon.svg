@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Card with whale outline">
+  <rect width="64" height="64" rx="14" fill="#f6f4ee"/>
+  <rect x="15" y="9" width="34" height="46" rx="5" fill="#ffffff" stroke="#18211f" stroke-width="3"/>
+  <path
+    d="M19 36c3.6-8.2 12.7-12.5 22.2-9.5 2.6.8 4.7 2.3 6.1 4.1 1.9-1.4 3.9-2.6 6.2-3.2-1.1 2.3-1.9 4.5-2.1 6.7 2.1 1 3.8 2.6 5 4.9-2.8-.3-5.2-.9-7.3-1.9-2.5 4.3-7.7 7.1-14.5 7.1-6.9 0-12.6-2.9-15.6-8.2z"
+    fill="none"
+    stroke="#0c7b60"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path d="M27 31.5h.1" fill="none" stroke="#18211f" stroke-width="4" stroke-linecap="round"/>
+</svg>

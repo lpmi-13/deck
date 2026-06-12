@@ -4,7 +4,6 @@ import { createGame, decksForGame, nextRound, pickWinner, submitCards } from "./
 import type { AnswerCard, DeckDefinition, GameState, Player, PlayMode, Submission } from "./game/types";
 import {
   createGameSummaryMessage,
-  createGameStateMessage,
   createPickWinnerMessage,
   createPlayerViewMessage,
   createPlayerViewRequestMessage,
@@ -51,9 +50,21 @@ interface UiState {
   multiplayer: MultiplayerUiState;
 }
 
+interface HostPeerUi {
+  id: string;
+  label: string;
+  status: ConnectionStatus;
+  session: WebRtcPeer;
+  localSignal: string;
+  remoteSignalInput: string;
+  peerPlayerId: string | null;
+  log: string[];
+}
+
 interface MultiplayerUiState {
   open: boolean;
   role: "host" | "guest";
+  hostPeers: HostPeerUi[];
   status: ConnectionStatus;
   session: WebRtcPeer | null;
   localSignal: string;
@@ -64,7 +75,6 @@ interface MultiplayerUiState {
   remoteSummary: GameSummaryPayload | null;
   remotePlayerView: PlayerViewPayload | null;
   remotePlayerId: string;
-  peerPlayerId: string | null;
 }
 
 const ui: UiState = {
@@ -85,6 +95,7 @@ const ui: UiState = {
   multiplayer: {
     open: false,
     role: "host",
+    hostPeers: [],
     status: "idle",
     session: null,
     localSignal: "",
@@ -94,8 +105,7 @@ const ui: UiState = {
     remoteGame: null,
     remoteSummary: null,
     remotePlayerView: null,
-    remotePlayerId: "",
-    peerPlayerId: null
+    remotePlayerId: ""
   }
 };
 
@@ -327,6 +337,19 @@ function renderSubmitting(game: GameState): string {
   const submittedCount = game.round.submissions.length;
   const neededCount = game.players.length - 1;
 
+  if (game.playMode === "multi-device" && isPlayerClaimedByHostPeer(activePlayer.id)) {
+    const peer = hostPeerForPlayer(activePlayer.id);
+    return `
+      <div class="phase-panel">
+        <div class="section-heading">
+          <h2>Waiting for ${escapeHtml(activePlayer.name)}</h2>
+          <p>${submittedCount} of ${neededCount} players have submitted. The connected guest can submit from their device.</p>
+        </div>
+        <button class="secondary" data-action="send-player-view" data-peer-id="${peer?.id ?? ""}" type="button" ${peer?.status === "connected" ? "" : "disabled"}>Resend Player View</button>
+      </div>
+    `;
+  }
+
   if (!ui.privacyGateOpen || ui.visiblePlayerId !== activePlayer.id) {
     return `
       <div class="phase-panel">
@@ -378,6 +401,18 @@ function renderRevealing(game: GameState): string {
   }
 
   const judge = playerById(game, game.round.judgeId);
+  if (game.playMode === "multi-device" && isPlayerClaimedByHostPeer(judge.id)) {
+    const peer = hostPeerForPlayer(judge.id);
+    return `
+      <div class="phase-panel">
+        <div class="section-heading">
+          <h2>Waiting for ${escapeHtml(judge.name)}</h2>
+          <p>The connected guest is judging this round from their device.</p>
+        </div>
+        <button class="secondary" data-action="send-player-view" data-peer-id="${peer?.id ?? ""}" type="button" ${peer?.status === "connected" ? "" : "disabled"}>Resend Player View</button>
+      </div>
+    `;
+  }
   const orderedSubmissions = game.round.revealOrder.map((index) => ({
     originalIndex: index,
     submission: game.round?.submissions[index]
@@ -447,7 +482,7 @@ function renderMultiplayerPanel(): string {
     <section class="multiplayer-panel">
       <div class="section-heading">
         <h2>Peer Connection</h2>
-        <p>Status: <strong class="status-pill status-${ui.multiplayer.status}">${ui.multiplayer.status}</strong></p>
+        <p>${renderMultiplayerStatus()}</p>
       </div>
 
       <div class="role-tabs" role="tablist">
@@ -471,28 +506,70 @@ function renderMultiplayerPanel(): string {
 
       ${ui.multiplayer.role === "host" ? renderHostSignaling() : renderGuestSignaling()}
       ${renderPeerMessenger()}
+      ${ui.multiplayer.role === "guest" ? renderGuestGameView() : ""}
       ${ui.multiplayer.remoteGame ? renderRemoteGameSnapshot(ui.multiplayer.remoteGame) : ""}
     </section>
   `;
 }
 
+function renderMultiplayerStatus(): string {
+  if (ui.multiplayer.role === "host") {
+    const connectedCount = connectedHostPeers().length;
+    const totalCount = ui.multiplayer.hostPeers.length;
+    return `Host: <strong class="status-pill status-${connectedCount > 0 ? "connected" : "idle"}">${connectedCount}/${totalCount} guests connected</strong>`;
+  }
+
+  return `Status: <strong class="status-pill status-${ui.multiplayer.status}">${ui.multiplayer.status}</strong>`;
+}
+
 function renderHostSignaling(): string {
   return `
-    <div class="signal-grid">
-      <div class="signal-field">
-        <div class="field-label">Host offer</div>
-        <textarea readonly name="localSignal">${escapeHtml(ui.multiplayer.localSignal)}</textarea>
-        <div class="button-row">
-          <button class="primary" data-action="create-host-offer" type="button">Create Offer</button>
-          <button class="secondary" data-action="copy-local-signal" type="button" ${ui.multiplayer.localSignal ? "" : "disabled"}>Copy</button>
+    <div class="host-peers">
+      <div class="button-row">
+        <button class="primary" data-action="create-host-offer" type="button">Add Guest Connection</button>
+        <button class="secondary" data-action="broadcast-game" type="button" ${connectedHostPeers().length > 0 && ui.game ? "" : "disabled"}>Broadcast All</button>
+      </div>
+      ${
+        ui.multiplayer.hostPeers.length > 0
+          ? ui.multiplayer.hostPeers.map(renderHostPeerCard).join("")
+          : '<p class="muted-copy">Create one guest connection for each remote player.</p>'
+      }
+    </div>
+  `;
+}
+
+function renderHostPeerCard(peer: HostPeerUi): string {
+  const peerPlayer = ui.game?.players.find((player) => player.id === peer.peerPlayerId);
+  return `
+    <article class="host-peer-card">
+      <div class="section-heading">
+        <h3>${escapeHtml(peer.label)}</h3>
+        <p>Status: <strong class="status-pill status-${peer.status}">${peer.status}</strong></p>
+      </div>
+      <div class="signal-grid">
+        <div class="signal-field">
+          <div class="field-label">Host offer</div>
+          <textarea readonly name="hostLocalSignal">${escapeHtml(peer.localSignal)}</textarea>
+          <button class="secondary" data-action="copy-local-signal" data-peer-id="${peer.id}" type="button" ${peer.localSignal ? "" : "disabled"}>Copy Offer</button>
+        </div>
+        <div class="signal-field">
+          <div class="field-label">Guest answer</div>
+          <textarea name="hostRemoteSignal" data-peer-id="${peer.id}">${escapeHtml(peer.remoteSignalInput)}</textarea>
+          <button class="primary" data-action="accept-guest-answer" data-peer-id="${peer.id}" type="button">Accept Answer</button>
         </div>
       </div>
-      <div class="signal-field">
-        <div class="field-label">Guest answer</div>
-        <textarea name="remoteSignal">${escapeHtml(ui.multiplayer.remoteSignalInput)}</textarea>
-        <button class="primary" data-action="accept-guest-answer" type="button">Accept Answer</button>
+      <div class="remote-game-grid">
+        <span>Player</span>
+        <strong>${escapeHtml(peerPlayer?.name ?? "Not selected")}</strong>
       </div>
-    </div>
+      <div class="button-row">
+        <button class="secondary" data-action="send-player-view" data-peer-id="${peer.id}" type="button" ${peer.status === "connected" && ui.game && peer.peerPlayerId ? "" : "disabled"}>Send Player View</button>
+        <button class="secondary" data-action="close-peer" data-peer-id="${peer.id}" type="button">Close</button>
+      </div>
+      <div class="message-log" aria-live="polite">
+        ${peer.log.map((entry) => `<div>${escapeHtml(entry)}</div>`).join("")}
+      </div>
+    </article>
   `;
 }
 
@@ -514,6 +591,10 @@ function renderGuestSignaling(): string {
 }
 
 function renderPeerMessenger(): string {
+  if (ui.multiplayer.role === "host") {
+    return "";
+  }
+
   return `
     <form class="peer-messenger" data-form="peer-send">
       <label class="field">
@@ -522,13 +603,174 @@ function renderPeerMessenger(): string {
       </label>
       <div class="button-row">
         <button class="primary" type="submit" ${ui.multiplayer.status === "connected" ? "" : "disabled"}>Send</button>
-        <button class="secondary" data-action="broadcast-game" type="button" ${ui.multiplayer.status === "connected" && ui.game ? "" : "disabled"}>Broadcast Game</button>
         <button class="secondary" data-action="close-peer" type="button" ${ui.multiplayer.session ? "" : "disabled"}>Close</button>
       </div>
       <div class="message-log" aria-live="polite">
         ${ui.multiplayer.log.map((entry) => `<div>${escapeHtml(entry)}</div>`).join("")}
       </div>
     </form>
+  `;
+}
+
+function renderGuestGameView(): string {
+  if (!ui.multiplayer.remoteSummary && !ui.multiplayer.remotePlayerView) {
+    return `
+      <div class="remote-game">
+        <div class="field-label">Guest game</div>
+        <p class="muted-copy">Connect to a host and wait for a game summary.</p>
+      </div>
+    `;
+  }
+
+  const summary = ui.multiplayer.remotePlayerView ?? ui.multiplayer.remoteSummary;
+  if (!summary) {
+    return "";
+  }
+
+  return `
+    <div class="remote-game guest-game">
+      <div class="field-label">Guest game</div>
+      ${renderGuestPlayerSelector(summary)}
+      ${ui.multiplayer.remotePlayerView ? renderRemotePlayerView(ui.multiplayer.remotePlayerView) : renderGuestSummary(summary)}
+    </div>
+  `;
+}
+
+function renderGuestPlayerSelector(summary: GameSummaryPayload): string {
+  return `
+    <div class="guest-selector">
+      <label class="field">
+        <span>Your player</span>
+        <select name="remotePlayerId">
+          <option value="">Choose player</option>
+          ${summary.players
+            .map(
+              (player) =>
+                `<option value="${player.id}" ${ui.multiplayer.remotePlayerId === player.id ? "selected" : ""}>${escapeHtml(player.name)}</option>`
+            )
+            .join("")}
+        </select>
+      </label>
+      <button class="primary" data-action="request-player-view" type="button" ${ui.multiplayer.status === "connected" && ui.multiplayer.remotePlayerId ? "" : "disabled"}>Request View</button>
+    </div>
+  `;
+}
+
+function renderGuestSummary(summary: GameSummaryPayload): string {
+  const judge = summary.players.find((player) => player.id === summary.round?.judgeId);
+  const activePlayer = summary.players.find((player) => player.id === summary.round?.activePlayerId);
+  return `
+    <div class="remote-game-grid">
+      <span>Phase</span>
+      <strong>${escapeHtml(summary.phase)}</strong>
+      <span>Round</span>
+      <strong>${summary.round?.number ?? 0}</strong>
+      <span>Judge</span>
+      <strong>${escapeHtml(judge?.name ?? "None")}</strong>
+      <span>Turn</span>
+      <strong>${escapeHtml(activePlayer?.name ?? "Waiting")}</strong>
+    </div>
+  `;
+}
+
+function renderRemotePlayerView(view: PlayerViewPayload): string {
+  const viewer = view.players.find((player) => player.id === view.viewerPlayerId);
+  const judge = view.players.find((player) => player.id === view.round?.judgeId);
+  const activePlayer = view.players.find((player) => player.id === view.round?.activePlayerId);
+  return `
+    <div class="remote-view">
+      <div class="remote-game-grid">
+        <span>You</span>
+        <strong>${escapeHtml(viewer?.name ?? "Unknown")}</strong>
+        <span>Phase</span>
+        <strong>${escapeHtml(view.phase)}</strong>
+        <span>Judge</span>
+        <strong>${escapeHtml(judge?.name ?? "None")}</strong>
+        <span>Turn</span>
+        <strong>${escapeHtml(activePlayer?.name ?? "Waiting")}</strong>
+      </div>
+      ${view.round ? renderRemoteQuestion(view) : ""}
+      ${renderRemotePlayerAction(view)}
+    </div>
+  `;
+}
+
+function renderRemoteQuestion(view: PlayerViewPayload): string {
+  if (!view.round) {
+    return "";
+  }
+
+  return `
+    <article class="remote-question">
+      <div class="card-label">Question</div>
+      <p>${escapeHtml(view.round.question.text)}</p>
+      <span class="pick-count">Pick ${view.round.question.pick}</span>
+    </article>
+  `;
+}
+
+function renderRemotePlayerAction(view: PlayerViewPayload): string {
+  if (!view.round) {
+    return "";
+  }
+
+  if (view.phase === "submitting" && view.round.activePlayerId === view.viewerPlayerId) {
+    return `
+      <form class="remote-action" data-form="remote-submit-cards">
+        <div class="hand-grid">
+          ${view.hand.map((card) => renderRemoteHandCard(card, view.round?.question.pick ?? 1)).join("")}
+        </div>
+        <button class="primary" type="submit">Submit Selected</button>
+      </form>
+    `;
+  }
+
+  if (view.phase === "revealing" && view.round.judgeId === view.viewerPlayerId) {
+    return `
+      <div class="submission-grid">
+        ${view.judgeSubmissions
+          .map(
+            (submission) => `
+              <article class="submission-card">
+                <div class="card-label">Submission ${submission.displayIndex + 1}</div>
+                <div class="submission-answers">
+                  ${submission.cards.map((card) => `<p>${escapeHtml(card.text)}</p>`).join("")}
+                </div>
+                <button class="primary" data-action="remote-pick-winner" data-submission-index="${submission.originalIndex}" type="button">Pick Winner</button>
+              </article>
+            `
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  if (view.phase === "roundEnd" && view.round.winnerId) {
+    const winner = view.players.find((player) => player.id === view.round?.winnerId);
+    return `<p class="muted-copy">${escapeHtml(winner?.name ?? "A player")} won the round. The host can start the next round.</p>`;
+  }
+
+  if (view.phase === "gameOver") {
+    const winner = [...view.players].sort((left, right) => right.score - left.score)[0];
+    return `<p class="muted-copy">${escapeHtml(winner.name)} won the game.</p>`;
+  }
+
+  return `<p class="muted-copy">Waiting for the host or another player.</p>`;
+}
+
+function renderRemoteHandCard(card: AnswerCard, pick: number): string {
+  const selected = ui.remoteSelectedCardIds.includes(card.id);
+  const inputType = pick === 1 ? "radio" : "checkbox";
+  return `
+    <label class="answer-card ${selected ? "is-selected" : ""}">
+      <input
+        type="${inputType}"
+        name="remoteSelectedCard"
+        value="${card.id}"
+        ${selected ? "checked" : ""}
+      />
+      <span>${escapeHtml(card.text)}</span>
+    </label>
   `;
 }
 
@@ -594,6 +836,7 @@ function bindEvents(): void {
       ui.selectedCardIds = [];
       syncUiToGame();
       saveGame();
+      syncConnectedPeerViews();
     });
   });
 
@@ -608,6 +851,25 @@ function bindEvents(): void {
       sendPeerMessage({ type: "chat", payload: text, sentAt: new Date().toISOString() });
       ui.multiplayer.log = [`You: ${text}`, ...ui.multiplayer.log].slice(0, 20);
       ui.multiplayer.outboundText = "";
+    });
+  });
+
+  app.querySelector<HTMLFormElement>('[data-form="remote-submit-cards"]')?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runAction(() => {
+      const view = ui.multiplayer.remotePlayerView;
+      if (!view) {
+        throw new Error("No remote player view is available.");
+      }
+
+      const requiredCards = view.round?.question.pick ?? 1;
+      if (ui.remoteSelectedCardIds.length !== requiredCards) {
+        throw new Error(`Select ${requiredCards} card${requiredCards === 1 ? "" : "s"}.`);
+      }
+
+      sendPeerMessage(createSubmitCardsMessage(view.viewerPlayerId, ui.remoteSelectedCardIds));
+      ui.remoteSelectedCardIds = [];
+      ui.multiplayer.log = ["Cards submitted to host", ...ui.multiplayer.log].slice(0, 20);
     });
   });
 
@@ -652,8 +914,31 @@ function bindEvents(): void {
     });
   });
 
+  app.querySelectorAll<HTMLInputElement>('input[name="remoteSelectedCard"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      ui.remoteSelectedCardIds = Array.from(
+        app.querySelectorAll<HTMLInputElement>('input[name="remoteSelectedCard"]:checked')
+      ).map((element) => element.value);
+      render();
+    });
+  });
+
+  app.querySelector<HTMLSelectElement>('select[name="remotePlayerId"]')?.addEventListener("change", (event) => {
+    ui.multiplayer.remotePlayerId = (event.currentTarget as HTMLSelectElement).value;
+    render();
+  });
+
   app.querySelector<HTMLTextAreaElement>('textarea[name="remoteSignal"]')?.addEventListener("input", (event) => {
     ui.multiplayer.remoteSignalInput = (event.currentTarget as HTMLTextAreaElement).value;
+  });
+
+  app.querySelectorAll<HTMLTextAreaElement>('textarea[name="hostRemoteSignal"]').forEach((textarea) => {
+    textarea.addEventListener("input", () => {
+      const peer = hostPeerById(textarea.dataset.peerId);
+      if (peer) {
+        peer.remoteSignalInput = textarea.value;
+      }
+    });
   });
 
   app.querySelector<HTMLInputElement>('input[name="peerMessage"]')?.addEventListener("input", (event) => {
@@ -670,10 +955,10 @@ function handleAction(element: HTMLElement): void {
 
   if (action === "create-host-offer") {
     void runAsyncAction(async () => {
-      resetPeerSession();
       ui.multiplayer.role = "host";
-      const peer = createPeerSession();
-      ui.multiplayer.localSignal = await peer.createHostOffer();
+      const peer = createHostPeerSession();
+      ui.multiplayer.hostPeers.push(peer);
+      peer.localSignal = await peer.session.createHostOffer();
     });
     return;
   }
@@ -692,10 +977,16 @@ function handleAction(element: HTMLElement): void {
 
   if (action === "accept-guest-answer") {
     void runAsyncAction(async () => {
+      const peerId = element.dataset.peerId;
+      if (peerId) {
+        const peer = requireHostPeer(peerId);
+        await peer.session.acceptGuestAnswer(peer.remoteSignalInput);
+        return;
+      }
+
       if (!ui.multiplayer.session) {
         throw new Error("Create a host offer before accepting an answer.");
       }
-
       await ui.multiplayer.session.acceptGuestAnswer(ui.multiplayer.remoteSignalInput);
     });
     return;
@@ -703,12 +994,18 @@ function handleAction(element: HTMLElement): void {
 
   if (action === "copy-local-signal") {
     void runAsyncAction(async () => {
-      if (!ui.multiplayer.localSignal) {
+      const peerId = element.dataset.peerId;
+      const signal = peerId ? requireHostPeer(peerId).localSignal : ui.multiplayer.localSignal;
+      if (!signal) {
         return;
       }
 
-      await navigator.clipboard.writeText(ui.multiplayer.localSignal);
-      ui.multiplayer.log = ["Signal copied", ...ui.multiplayer.log].slice(0, 20);
+      await navigator.clipboard.writeText(signal);
+      if (peerId) {
+        appendHostPeerLog(peerId, "Signal copied");
+      } else {
+        ui.multiplayer.log = ["Signal copied", ...ui.multiplayer.log].slice(0, 20);
+      }
     });
     return;
   }
@@ -727,7 +1024,12 @@ function handleAction(element: HTMLElement): void {
     }
 
     if (action === "close-peer") {
-      resetPeerSession();
+      const peerId = element.dataset.peerId;
+      if (peerId) {
+        closeHostPeer(peerId);
+      } else {
+        resetPeerSession();
+      }
     }
 
     if (action === "broadcast-game") {
@@ -735,8 +1037,33 @@ function handleAction(element: HTMLElement): void {
         throw new Error("Start a game before broadcasting state.");
       }
 
-      sendPeerMessage(createGameStateMessage(ui.game));
-      ui.multiplayer.log = ["Game state sent", ...ui.multiplayer.log].slice(0, 20);
+      broadcastGameSummary();
+      syncConnectedPeerViews();
+      ui.multiplayer.log = ["Game summary sent", ...ui.multiplayer.log].slice(0, 20);
+    }
+
+    if (action === "send-player-view") {
+      const peerId = element.dataset.peerId;
+      if (peerId) {
+        syncHostPeerView(peerId);
+      } else {
+        syncConnectedPeerViews();
+      }
+    }
+
+    if (action === "request-player-view") {
+      if (!ui.multiplayer.remotePlayerId) {
+        throw new Error("Choose your player first.");
+      }
+
+      sendPeerMessage(createPlayerViewRequestMessage(ui.multiplayer.remotePlayerId));
+      ui.multiplayer.log = ["Player view requested", ...ui.multiplayer.log].slice(0, 20);
+    }
+
+    if (action === "remote-pick-winner") {
+      const submissionIndex = Number(element.dataset.submissionIndex);
+      sendPeerMessage(createPickWinnerMessage(submissionIndex));
+      ui.multiplayer.log = ["Winner pick sent to host", ...ui.multiplayer.log].slice(0, 20);
     }
 
     if (action === "add-player") {
@@ -767,6 +1094,7 @@ function handleAction(element: HTMLElement): void {
       if (ui.game) {
         ui.game = pickWinner(ui.game, submissionIndex);
         saveGame();
+        syncConnectedPeerViews();
       }
     }
 
@@ -775,6 +1103,7 @@ function handleAction(element: HTMLElement): void {
         ui.game = nextRound(ui.game);
         syncUiToGame();
         saveGame();
+        syncConnectedPeerViews();
       }
     }
 
@@ -831,7 +1160,7 @@ function restoreGame(): GameState | null {
   }
 
   try {
-    return JSON.parse(stored) as GameState;
+    return normalizeRestoredGame(JSON.parse(stored) as GameState);
   } catch {
     localStorage.removeItem(STORAGE_KEY);
     return null;
@@ -844,6 +1173,44 @@ function saveGame(): void {
   }
 }
 
+function createHostPeerSession(): HostPeerUi {
+  const id = `host-peer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const label = `Guest ${ui.multiplayer.hostPeers.length + 1}`;
+  const peerState = {} as HostPeerUi;
+  const peer = new WebRtcPeer({
+    onStatusChange: (status) => {
+      peerState.status = status;
+      if (status === "connected" && ui.game) {
+        sendMessageToHostPeer(peerState.id, createGameSummaryMessage(ui.game));
+        syncHostPeerView(peerState.id);
+      }
+      render();
+    },
+    onMessage: (message) => {
+      try {
+        handlePeerMessage(message, peerState.id);
+        ui.error = null;
+      } catch (error) {
+        ui.error = error instanceof Error ? error.message : "Something went wrong.";
+      }
+      render();
+    }
+  });
+
+  Object.assign(peerState, {
+    id,
+    label,
+    status: peer.status,
+    session: peer,
+    localSignal: "",
+    remoteSignalInput: "",
+    peerPlayerId: null,
+    log: []
+  } satisfies HostPeerUi);
+
+  return peerState;
+}
+
 function createPeerSession(): WebRtcPeer {
   const peer = new WebRtcPeer({
     onStatusChange: (status) => {
@@ -851,7 +1218,12 @@ function createPeerSession(): WebRtcPeer {
       render();
     },
     onMessage: (message) => {
-      handlePeerMessage(message);
+      try {
+        handlePeerMessage(message);
+        ui.error = null;
+      } catch (error) {
+        ui.error = error instanceof Error ? error.message : "Something went wrong.";
+      }
       render();
     }
   });
@@ -865,6 +1237,8 @@ function createPeerSession(): WebRtcPeer {
 
 function resetPeerSession(): void {
   ui.multiplayer.session?.close();
+  ui.multiplayer.hostPeers.forEach((peer) => peer.session.close());
+  ui.multiplayer.hostPeers = [];
   ui.multiplayer.session = null;
   ui.multiplayer.status = "idle";
   ui.multiplayer.localSignal = "";
@@ -872,6 +1246,9 @@ function resetPeerSession(): void {
   ui.multiplayer.outboundText = "";
   ui.multiplayer.log = [];
   ui.multiplayer.remoteGame = null;
+  ui.multiplayer.remoteSummary = null;
+  ui.multiplayer.remotePlayerView = null;
+  ui.multiplayer.remotePlayerId = "";
 }
 
 function sendPeerMessage(message: PeerMessage): void {
@@ -882,7 +1259,126 @@ function sendPeerMessage(message: PeerMessage): void {
   ui.multiplayer.session.send(message);
 }
 
+function sendMessageToHostPeer(peerId: string, message: PeerMessage): void {
+  const peer = requireHostPeer(peerId);
+  if (peer.status !== "connected") {
+    throw new Error(`${peer.label} is not connected.`);
+  }
+
+  peer.session.send(message);
+}
+
+function broadcastGameSummary(): void {
+  if (!ui.game) {
+    return;
+  }
+
+  connectedHostPeers().forEach((peer) => {
+    sendMessageToHostPeer(peer.id, createGameSummaryMessage(ui.game as GameState));
+  });
+}
+
+function syncConnectedPeerViews(): void {
+  if (!ui.game) {
+    return;
+  }
+
+  broadcastGameSummary();
+  connectedHostPeers().forEach((peer) => {
+    if (peer.peerPlayerId) {
+      sendMessageToHostPeer(peer.id, createPlayerViewMessage(ui.game as GameState, peer.peerPlayerId));
+    }
+  });
+}
+
+function syncHostPeerView(peerId: string): void {
+  if (!ui.game) {
+    return;
+  }
+
+  const peer = requireHostPeer(peerId);
+  if (peer.status !== "connected") {
+    return;
+  }
+
+  sendMessageToHostPeer(peer.id, createGameSummaryMessage(ui.game));
+
+  if (peer.peerPlayerId) {
+    sendMessageToHostPeer(peer.id, createPlayerViewMessage(ui.game, peer.peerPlayerId));
+  }
+}
+
+function closeHostPeer(peerId: string): void {
+  const peer = hostPeerById(peerId);
+  peer?.session.close();
+  ui.multiplayer.hostPeers = ui.multiplayer.hostPeers.filter((candidate) => candidate.id !== peerId);
+}
+
+function connectedHostPeers(): HostPeerUi[] {
+  return ui.multiplayer.hostPeers.filter((peer) => peer.status === "connected");
+}
+
+function hostPeerById(peerId: string | undefined): HostPeerUi | undefined {
+  return ui.multiplayer.hostPeers.find((peer) => peer.id === peerId);
+}
+
+function requireHostPeer(peerId: string): HostPeerUi {
+  const peer = hostPeerById(peerId);
+  if (!peer) {
+    throw new Error("Guest connection was not found.");
+  }
+  return peer;
+}
+
+function hostPeerForPlayer(playerId: string): HostPeerUi | undefined {
+  return ui.multiplayer.hostPeers.find((peer) => peer.peerPlayerId === playerId);
+}
+
+function isPlayerClaimedByHostPeer(playerId: string): boolean {
+  return Boolean(hostPeerForPlayer(playerId));
+}
+
+function appendHostPeerLog(peerId: string, entry: string): void {
+  const peer = hostPeerById(peerId);
+  if (peer) {
+    peer.log = [entry, ...peer.log].slice(0, 20);
+  }
+}
+
+function claimHostPeerPlayer(peerId: string, playerId: string): void {
+  ui.multiplayer.hostPeers.forEach((peer) => {
+    if (peer.id !== peerId && peer.peerPlayerId === playerId) {
+      peer.peerPlayerId = null;
+      appendHostPeerLog(peer.id, "Player claim moved to another guest");
+    }
+  });
+
+  requireHostPeer(peerId).peerPlayerId = playerId;
+}
+
 function formatPeerMessage(message: PeerMessage): string {
+  if (isGameSummaryMessage(message)) {
+    const round = message.payload.round?.number ?? 0;
+    return `Game summary received: round ${round}`;
+  }
+
+  if (isPlayerViewMessage(message)) {
+    const round = message.payload.round?.number ?? 0;
+    return `Player view received: round ${round}`;
+  }
+
+  if (isPlayerViewRequestMessage(message)) {
+    return `Player view requested for ${message.payload.playerId}`;
+  }
+
+  if (isSubmitCardsMessage(message)) {
+    return `Cards submitted by ${message.payload.playerId}`;
+  }
+
+  if (isPickWinnerMessage(message)) {
+    return `Winner pick received for submission ${message.payload.submissionIndex + 1}`;
+  }
+
   if (isGameStateMessage(message)) {
     const round = message.payload.game.round?.number ?? 0;
     return `Game state received: round ${round}`;
@@ -895,12 +1391,83 @@ function formatPeerMessage(message: PeerMessage): string {
   return `Peer: ${JSON.stringify(message.payload)}`;
 }
 
-function handlePeerMessage(message: PeerMessage): void {
+function handlePeerMessage(message: PeerMessage, hostPeerId?: string): void {
+  if (hostPeerId) {
+    handleHostPeerMessage(hostPeerId, message);
+    appendHostPeerLog(hostPeerId, formatPeerMessage(message));
+    return;
+  }
+
+  handleGuestPeerMessage(message);
+  ui.multiplayer.log = [formatPeerMessage(message), ...ui.multiplayer.log].slice(0, 20);
+}
+
+function handleGuestPeerMessage(message: PeerMessage): void {
+  if (isGameSummaryMessage(message)) {
+    ui.multiplayer.remoteSummary = message.payload;
+  }
+
+  if (isPlayerViewMessage(message)) {
+    ui.multiplayer.remotePlayerView = message.payload;
+    ui.multiplayer.remoteSummary = message.payload;
+    ui.multiplayer.remotePlayerId = message.payload.viewerPlayerId;
+    ui.remoteSelectedCardIds = [];
+  }
+
   if (isGameStateMessage(message)) {
     ui.multiplayer.remoteGame = message.payload.game;
   }
+}
 
-  ui.multiplayer.log = [formatPeerMessage(message), ...ui.multiplayer.log].slice(0, 20);
+function handleHostPeerMessage(peerId: string, message: PeerMessage): void {
+  if (isPlayerViewRequestMessage(message)) {
+    if (ui.game && !ui.game.players.some((player) => player.id === message.payload.playerId)) {
+      throw new Error("Requested player does not exist in this game.");
+    }
+
+    claimHostPeerPlayer(peerId, message.payload.playerId);
+    syncHostPeerView(peerId);
+  }
+
+  if (isSubmitCardsMessage(message)) {
+    if (!ui.game) {
+      throw new Error("No host game is available for remote submission.");
+    }
+    requireHostPeerPlayer(peerId, message.payload.playerId);
+
+    ui.game = submitCards(ui.game, message.payload.playerId, message.payload.cardIds);
+    syncUiToGame();
+    saveGame();
+    syncConnectedPeerViews();
+  }
+
+  if (isPickWinnerMessage(message)) {
+    if (!ui.game) {
+      throw new Error("No host game is available for remote judging.");
+    }
+    const peer = requireHostPeer(peerId);
+    if (!peer.peerPlayerId || ui.game.round?.judgeId !== peer.peerPlayerId) {
+      throw new Error("Only the remote judge can pick a winner.");
+    }
+
+    ui.game = pickWinner(ui.game, message.payload.submissionIndex);
+    saveGame();
+    syncConnectedPeerViews();
+  }
+}
+
+function requireHostPeerPlayer(peerId: string, playerId: string): void {
+  const peer = requireHostPeer(peerId);
+  if (peer.peerPlayerId !== playerId) {
+    throw new Error(`${peer.label} has not claimed that player.`);
+  }
+}
+
+function normalizeRestoredGame(game: GameState): GameState {
+  return {
+    ...game,
+    playMode: game.playMode ?? "single-device"
+  };
 }
 
 function playerById(game: GameState, playerId: string): Player {
