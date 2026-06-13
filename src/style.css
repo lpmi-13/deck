@@ -540,6 +540,25 @@ textarea {
   font-weight: 800;
 }
 
+.signal-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #63716c;
+}
+
+.signal-qr {
+  display: block;
+  align-self: start;
+  width: 200px;
+  max-width: 100%;
+  height: auto;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid rgba(24, 33, 31, 0.12);
+  border-radius: 8px;
+  image-rendering: pixelated;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -617,6 +636,49 @@ textarea {
 .muted-copy {
   margin: 0;
   color: #63716c;
+}
+
+.qr-scanner-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 14px;
+  padding: 20px;
+  background: rgba(10, 14, 13, 0.94);
+  color: #fff;
+}
+
+.qr-scanner-overlay h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  text-align: center;
+}
+
+.qr-scanner-stage {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.qr-scanner-video {
+  width: 100%;
+  max-width: 460px;
+  max-height: 100%;
+  background: #000;
+  border-radius: 12px;
+}
+
+.qr-scanner-status {
+  margin: 0;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.qr-scanner-actions {
+  display: flex;
+  justify-content: center;
 }
 
 @media (max-width: 860px) {

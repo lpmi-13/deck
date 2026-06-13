@@ -20,6 +20,8 @@ import {
 import { WebRtcPeer } from "./multiplayer/webrtc";
 import type { ConnectionStatus, PeerMessage } from "./multiplayer/transport";
 import { announce } from "./a11y/announcer";
+import { createQrDataUrl } from "./multiplayer/qrCode";
+import { qrPayloadToSignal, signalToQrPayload } from "./multiplayer/qrSignal";
 
 const STORAGE_KEY = "cards-against-containers.game";
 const decks = loadDecks();
@@ -57,6 +59,7 @@ interface HostPeerUi {
   status: ConnectionStatus;
   session: WebRtcPeer;
   localSignal: string;
+  localQr: string | null;
   remoteSignalInput: string;
   peerPlayerId: string | null;
   log: string[];
@@ -69,6 +72,7 @@ interface MultiplayerUiState {
   status: ConnectionStatus;
   session: WebRtcPeer | null;
   localSignal: string;
+  localQr: string | null;
   remoteSignalInput: string;
   outboundText: string;
   log: string[];
@@ -100,6 +104,7 @@ const ui: UiState = {
     status: "idle",
     session: null,
     localSignal: "",
+    localQr: null,
     remoteSignalInput: "",
     outboundText: "",
     log: [],
@@ -577,13 +582,17 @@ function renderHostPeerCard(peer: HostPeerUi): string {
       <div class="signal-grid">
         <div class="signal-field">
           <div class="field-label" id="host-offer-label-${peer.id}">Host offer</div>
+          <p class="signal-hint">Show this code to the guest, or copy the text.</p>
+          ${peer.localQr ? `<img class="signal-qr" src="${peer.localQr}" alt="QR code with the host offer for ${escapeAttribute(peer.label)}" />` : ""}
           <textarea readonly name="hostLocalSignal" aria-labelledby="host-offer-label-${peer.id}">${escapeHtml(peer.localSignal)}</textarea>
           <button class="secondary" data-action="copy-local-signal" data-peer-id="${peer.id}" type="button" ${peer.localSignal ? "" : "disabled"}>Copy Offer</button>
         </div>
         <div class="signal-field">
           <div class="field-label" id="guest-answer-label-${peer.id}">Guest answer</div>
+          <p class="signal-hint">Scan the guest's answer code, or paste it below.</p>
+          <button class="primary" data-action="scan-guest-answer" data-peer-id="${peer.id}" type="button">Scan Guest Answer</button>
           <textarea name="hostRemoteSignal" data-peer-id="${peer.id}" aria-labelledby="guest-answer-label-${peer.id}">${escapeHtml(peer.remoteSignalInput)}</textarea>
-          <button class="primary" data-action="accept-guest-answer" data-peer-id="${peer.id}" type="button">Accept Answer</button>
+          <button class="secondary" data-action="accept-guest-answer" data-peer-id="${peer.id}" type="button">Accept Pasted Answer</button>
         </div>
       </div>
       <div class="remote-game-grid">
@@ -606,11 +615,15 @@ function renderGuestSignaling(): string {
     <div class="signal-grid">
       <div class="signal-field">
         <div class="field-label" id="guest-host-offer-label">Host offer</div>
+        <p class="signal-hint">Scan the host's code, or paste it and create an answer.</p>
+        <button class="primary" data-action="scan-host-offer" type="button">Scan Host Offer</button>
         <textarea name="remoteSignal" aria-labelledby="guest-host-offer-label">${escapeHtml(ui.multiplayer.remoteSignalInput)}</textarea>
-        <button class="primary" data-action="create-guest-answer" type="button">Create Answer</button>
+        <button class="secondary" data-action="create-guest-answer" type="button">Create Answer From Text</button>
       </div>
       <div class="signal-field">
         <div class="field-label" id="guest-local-answer-label">Guest answer</div>
+        <p class="signal-hint">Show this code to the host once it appears.</p>
+        ${ui.multiplayer.localQr ? `<img class="signal-qr" src="${ui.multiplayer.localQr}" alt="QR code with your answer for the host to scan" />` : ""}
         <textarea readonly name="localSignal" aria-labelledby="guest-local-answer-label">${escapeHtml(ui.multiplayer.localSignal)}</textarea>
         <button class="secondary" data-action="copy-local-signal" type="button" ${ui.multiplayer.localSignal ? "" : "disabled"}>Copy</button>
       </div>
@@ -987,18 +1000,24 @@ function handleAction(element: HTMLElement): void {
       const peer = createHostPeerSession();
       ui.multiplayer.hostPeers.push(peer);
       peer.localSignal = await peer.session.createHostOffer();
+      peer.localQr = await buildSignalQr(peer.localSignal);
     });
     return;
   }
 
   if (action === "create-guest-answer") {
+    void runAsyncAction(() => acceptHostOffer(ui.multiplayer.remoteSignalInput));
+    return;
+  }
+
+  if (action === "scan-host-offer") {
     void runAsyncAction(async () => {
-      const hostOffer = ui.multiplayer.remoteSignalInput;
-      resetPeerSession();
-      ui.multiplayer.role = "guest";
-      ui.multiplayer.remoteSignalInput = hostOffer;
-      const peer = createPeerSession();
-      ui.multiplayer.localSignal = await peer.createGuestAnswer(hostOffer);
+      const { scanQrCode } = await import("./multiplayer/qrScanner");
+      const scanned = await scanQrCode("Scan the host's offer code");
+      if (scanned === null) {
+        return;
+      }
+      await acceptHostOffer(await qrPayloadToSignal(scanned));
     });
     return;
   }
@@ -1016,6 +1035,28 @@ function handleAction(element: HTMLElement): void {
         throw new Error("Create a host offer before accepting an answer.");
       }
       await ui.multiplayer.session.acceptGuestAnswer(ui.multiplayer.remoteSignalInput);
+    });
+    return;
+  }
+
+  if (action === "scan-guest-answer") {
+    void runAsyncAction(async () => {
+      const peerId = element.dataset.peerId;
+      if (!peerId) {
+        return;
+      }
+
+      const peer = requireHostPeer(peerId);
+      const { scanQrCode } = await import("./multiplayer/qrScanner");
+      const scanned = await scanQrCode("Scan the guest's answer code");
+      if (scanned === null) {
+        return;
+      }
+
+      const answer = await qrPayloadToSignal(scanned);
+      peer.remoteSignalInput = answer;
+      await peer.session.acceptGuestAnswer(answer);
+      appendHostPeerLog(peerId, "Guest answer scanned");
     });
     return;
   }
@@ -1207,6 +1248,29 @@ function saveGame(): void {
   }
 }
 
+async function buildSignalQr(signalString: string): Promise<string | null> {
+  try {
+    return createQrDataUrl(await signalToQrPayload(signalString));
+  } catch {
+    // Too large or unsupported for a QR code — the copy/paste fallback remains.
+    return null;
+  }
+}
+
+async function acceptHostOffer(hostOffer: string): Promise<void> {
+  const offer = hostOffer.trim();
+  if (!offer) {
+    throw new Error("Scan or paste a host offer first.");
+  }
+
+  resetPeerSession();
+  ui.multiplayer.role = "guest";
+  ui.multiplayer.remoteSignalInput = offer;
+  const peer = createPeerSession();
+  ui.multiplayer.localSignal = await peer.createGuestAnswer(offer);
+  ui.multiplayer.localQr = await buildSignalQr(ui.multiplayer.localSignal);
+}
+
 function createHostPeerSession(): HostPeerUi {
   const id = `host-peer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const label = `Guest ${ui.multiplayer.hostPeers.length + 1}`;
@@ -1238,6 +1302,7 @@ function createHostPeerSession(): HostPeerUi {
     status: peer.status,
     session: peer,
     localSignal: "",
+    localQr: null,
     remoteSignalInput: "",
     peerPlayerId: null,
     log: []
@@ -1267,6 +1332,7 @@ function createPeerSession(): WebRtcPeer {
   ui.multiplayer.session = peer;
   ui.multiplayer.status = peer.status;
   ui.multiplayer.localSignal = "";
+  ui.multiplayer.localQr = null;
   ui.multiplayer.log = [];
   return peer;
 }
@@ -1278,6 +1344,7 @@ function resetPeerSession(): void {
   ui.multiplayer.session = null;
   ui.multiplayer.status = "idle";
   ui.multiplayer.localSignal = "";
+  ui.multiplayer.localQr = null;
   ui.multiplayer.remoteSignalInput = "";
   ui.multiplayer.outboundText = "";
   ui.multiplayer.log = [];
