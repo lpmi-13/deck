@@ -19,6 +19,7 @@ import {
 } from "./multiplayer/protocol";
 import { WebRtcPeer } from "./multiplayer/webrtc";
 import type { ConnectionStatus, PeerMessage } from "./multiplayer/transport";
+import { announce } from "./a11y/announcer";
 
 const STORAGE_KEY = "cards-against-containers.game";
 const decks = loadDecks();
@@ -109,6 +110,10 @@ const ui: UiState = {
   }
 };
 
+// Tracks the previously rendered primary view so focus only moves to a new
+// view's heading when the view actually changes (see currentViewKey).
+let lastViewKey: string | null = null;
+
 syncUiToGame();
 render();
 
@@ -139,7 +144,7 @@ function render(): void {
         </div>
       </header>
       <main>
-        ${ui.error ? `<div class="notice error" role="alert">${escapeHtml(ui.error)}</div>` : ""}
+        ${ui.error ? `<div class="notice error">${escapeHtml(ui.error)}</div>` : ""}
         ${ui.game ? renderGame(ui.game) : renderSetup()}
         ${ui.multiplayer.open ? renderMultiplayerPanel() : ""}
       </main>
@@ -147,7 +152,16 @@ function render(): void {
   `;
 
   bindEvents();
-  restoreFocus(focusSnapshot);
+
+  // Keep keyboard users oriented: restore focus to the same control when it
+  // survives the re-render, otherwise move focus to the new view's heading when
+  // the primary view actually changes (e.g. a new round or game phase).
+  const restoredFocus = restoreFocus(focusSnapshot);
+  const viewKey = currentViewKey();
+  if (!restoredFocus && focusSnapshot && viewKey !== lastViewKey) {
+    focusViewHeading();
+  }
+  lastViewKey = viewKey;
 }
 
 function renderSetup(): string {
@@ -158,7 +172,7 @@ function renderSetup(): string {
     <section class="setup-layout">
       <form class="setup-panel" data-form="setup">
         <div class="section-heading">
-          <h2>Game Setup</h2>
+          <h2 data-view-heading tabindex="-1">Game Setup</h2>
           <p>Add players, choose decks, and choose how people will play.</p>
         </div>
 
@@ -190,7 +204,7 @@ function renderSetup(): string {
           <input name="targetScore" type="number" min="1" max="25" value="${ui.targetScore}" />
         </label>
 
-        <button class="primary" type="submit">Start Game</button>
+        <button class="primary" type="submit" data-control="start-game">Start Game</button>
       </form>
 
       <aside class="deck-summary">
@@ -354,7 +368,7 @@ function renderSubmitting(game: GameState): string {
     return `
       <div class="phase-panel">
         <div class="section-heading">
-          <h2>Waiting for ${escapeHtml(activePlayer.name)}</h2>
+          <h2 data-view-heading tabindex="-1">Waiting for ${escapeHtml(activePlayer.name)}</h2>
           <p>${submittedCount} of ${neededCount} players have submitted. The connected guest can submit from their device.</p>
         </div>
         <button class="secondary" data-action="send-player-view" data-peer-id="${peer?.id ?? ""}" type="button" ${peer?.status === "connected" ? "" : "disabled"}>Resend Player View</button>
@@ -366,7 +380,7 @@ function renderSubmitting(game: GameState): string {
     return `
       <div class="phase-panel">
         <div class="section-heading">
-          <h2>${escapeHtml(activePlayer.name)}'s Turn</h2>
+          <h2 data-view-heading tabindex="-1">${escapeHtml(activePlayer.name)}'s Turn</h2>
           <p>${submittedCount} of ${neededCount} players have submitted. Pass the device before revealing the hand.</p>
         </div>
         <button class="primary" data-action="open-hand" data-player-id="${activePlayer.id}" type="button">Show Hand</button>
@@ -377,7 +391,7 @@ function renderSubmitting(game: GameState): string {
   return `
     <form class="phase-panel" data-form="submit-cards" data-player-id="${activePlayer.id}">
       <div class="section-heading">
-        <h2>${escapeHtml(activePlayer.name)}, choose ${game.round.question.pick}</h2>
+        <h2 data-view-heading tabindex="-1">${escapeHtml(activePlayer.name)}, choose ${game.round.question.pick}</h2>
         <p>${escapeHtml(judge.name)} is judging this round.</p>
       </div>
       <div class="hand-grid">
@@ -385,7 +399,7 @@ function renderSubmitting(game: GameState): string {
       </div>
       <div class="submit-bar">
         <button class="secondary" data-action="hide-hand" type="button">Hide Hand</button>
-        <button class="primary" type="submit">Submit Selected</button>
+        <button class="primary" type="submit" data-control="submit-cards">Submit Selected</button>
       </div>
     </form>
   `;
@@ -418,7 +432,7 @@ function renderRevealing(game: GameState): string {
     return `
       <div class="phase-panel">
         <div class="section-heading">
-          <h2>Waiting for ${escapeHtml(judge.name)}</h2>
+          <h2 data-view-heading tabindex="-1">Waiting for ${escapeHtml(judge.name)}</h2>
           <p>The connected guest is judging this round from their device.</p>
         </div>
         <button class="secondary" data-action="send-player-view" data-peer-id="${peer?.id ?? ""}" type="button" ${peer?.status === "connected" ? "" : "disabled"}>Resend Player View</button>
@@ -433,7 +447,7 @@ function renderRevealing(game: GameState): string {
   return `
     <div class="phase-panel">
       <div class="section-heading">
-        <h2>${escapeHtml(judge.name)} Picks a Winner</h2>
+        <h2 data-view-heading tabindex="-1">${escapeHtml(judge.name)} Picks a Winner</h2>
         <p>Submissions are anonymous until the winner is selected.</p>
       </div>
       <div class="submission-grid">
@@ -468,7 +482,7 @@ function renderRoundEnd(game: GameState): string {
   return `
     <div class="phase-panel">
       <div class="section-heading">
-        <h2>${escapeHtml(winner.name)} Wins the Round</h2>
+        <h2 data-view-heading tabindex="-1">${escapeHtml(winner.name)} Wins the Round</h2>
         <p>First to ${game.targetScore} wins the game.</p>
       </div>
       <button class="primary" data-action="next-round" type="button">Next Round</button>
@@ -481,7 +495,7 @@ function renderGameOver(game: GameState): string {
   return `
     <div class="phase-panel">
       <div class="section-heading">
-        <h2>${escapeHtml(winner.name)} Wins</h2>
+        <h2 data-view-heading tabindex="-1">${escapeHtml(winner.name)} Wins</h2>
         <p>Final score: ${winner.score}</p>
       </div>
       <button class="primary" data-action="show-setup" type="button">Play Again</button>
@@ -616,7 +630,7 @@ function renderPeerMessenger(): string {
         <input name="peerMessage" value="${escapeAttribute(ui.multiplayer.outboundText)}" />
       </label>
       <div class="button-row">
-        <button class="primary" type="submit" ${ui.multiplayer.status === "connected" ? "" : "disabled"}>Send</button>
+        <button class="primary" type="submit" data-control="peer-send" ${ui.multiplayer.status === "connected" ? "" : "disabled"}>Send</button>
         <button class="secondary" data-action="close-peer" type="button" ${ui.multiplayer.session ? "" : "disabled"}>Close</button>
       </div>
       <div class="message-log" aria-live="polite">
@@ -734,7 +748,7 @@ function renderRemotePlayerAction(view: PlayerViewPayload): string {
         <div class="hand-grid">
           ${view.hand.map((card) => renderRemoteHandCard(card, view.round?.question.pick ?? 1)).join("")}
         </div>
-        <button class="primary" type="submit">Submit Selected</button>
+        <button class="primary" type="submit" data-control="remote-submit-cards">Submit Selected</button>
       </form>
     `;
   }
@@ -1131,12 +1145,18 @@ function handleAction(element: HTMLElement): void {
   });
 }
 
+function setError(error: unknown): void {
+  const message = error instanceof Error ? error.message : "Something went wrong.";
+  ui.error = message;
+  announce(message, { assertive: true });
+}
+
 function runAction(action: () => void): void {
   try {
     ui.error = null;
     action();
   } catch (error) {
-    ui.error = error instanceof Error ? error.message : "Something went wrong.";
+    setError(error);
   }
 
   render();
@@ -1147,7 +1167,7 @@ async function runAsyncAction(action: () => Promise<void>): Promise<void> {
     ui.error = null;
     await action();
   } catch (error) {
-    ui.error = error instanceof Error ? error.message : "Something went wrong.";
+    setError(error);
   }
 
   render();
@@ -1194,6 +1214,7 @@ function createHostPeerSession(): HostPeerUi {
   const peer = new WebRtcPeer({
     onStatusChange: (status) => {
       peerState.status = status;
+      announce(`${label} ${status}.`);
       if (status === "connected" && ui.game) {
         sendMessageToHostPeer(peerState.id, createGameSummaryMessage(ui.game));
         syncHostPeerView(peerState.id);
@@ -1205,7 +1226,7 @@ function createHostPeerSession(): HostPeerUi {
         handlePeerMessage(message, peerState.id);
         ui.error = null;
       } catch (error) {
-        ui.error = error instanceof Error ? error.message : "Something went wrong.";
+        setError(error);
       }
       render();
     }
@@ -1229,6 +1250,7 @@ function createPeerSession(): WebRtcPeer {
   const peer = new WebRtcPeer({
     onStatusChange: (status) => {
       ui.multiplayer.status = status;
+      announce(`Host connection ${status}.`);
       render();
     },
     onMessage: (message) => {
@@ -1236,7 +1258,7 @@ function createPeerSession(): WebRtcPeer {
         handlePeerMessage(message);
         ui.error = null;
       } catch (error) {
-        ui.error = error instanceof Error ? error.message : "Something went wrong.";
+        setError(error);
       }
       render();
     }
@@ -1497,6 +1519,7 @@ const FOCUS_MATCH_ATTRIBUTES = [
   "type",
   "value",
   "data-action",
+  "data-control",
   "data-role",
   "data-peer-id",
   "data-player-id",
@@ -1541,9 +1564,9 @@ function captureFocus(): FocusSnapshot | null {
   return { tag: active.tagName, attributes, selectionStart, selectionEnd };
 }
 
-function restoreFocus(snapshot: FocusSnapshot | null): void {
+function restoreFocus(snapshot: FocusSnapshot | null): boolean {
   if (!snapshot) {
-    return;
+    return false;
   }
 
   const candidates = app.querySelectorAll<HTMLElement>("button, input, select, textarea");
@@ -1570,8 +1593,40 @@ function restoreFocus(snapshot: FocusSnapshot | null): void {
         // Some input types do not support setSelectionRange; focus alone is enough.
       }
     }
-    return;
+    return true;
   }
+
+  return false;
+}
+
+// A stable key describing the primary view (setup screen, or game phase plus the
+// player it is waiting on). When this changes between renders the user has moved
+// to a new "screen", which is when moving focus to the heading is appropriate.
+function currentViewKey(): string {
+  if (!ui.game) {
+    return "setup";
+  }
+
+  const round = ui.game.round;
+  if (!round) {
+    return "game";
+  }
+
+  if (ui.game.phase === "submitting") {
+    const activeId = round.activePlayerId ?? "";
+    if (ui.game.playMode === "multi-device" && isPlayerClaimedByHostPeer(activeId)) {
+      return `submitting:remote:${activeId}`;
+    }
+    const gate = ui.privacyGateOpen && ui.visiblePlayerId === activeId ? "hand" : "gate";
+    return `submitting:${gate}:${activeId}`;
+  }
+
+  return `${ui.game.phase}:${round.judgeId}:${round.winnerId ?? ""}`;
+}
+
+function focusViewHeading(): void {
+  const heading = app.querySelector<HTMLElement>("[data-view-heading]");
+  heading?.focus();
 }
 
 function escapeHtml(value: string): string {
