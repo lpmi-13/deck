@@ -41,6 +41,29 @@ button:disabled {
   opacity: 0.45;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #0c7b60;
+  outline-offset: 2px;
+}
+
+/* Surface focus on the whole card for label-wrapped inputs, which sit in a
+   corner and are easy to miss. */
+.answer-card:focus-within,
+.deck-option:focus-within,
+.mode-option:focus-within {
+  outline: 3px solid #0c7b60;
+  outline-offset: 2px;
+}
+
+.answer-card input:focus-visible,
+.deck-option input:focus-visible,
+.mode-option input:focus-visible {
+  outline: none;
+}
+
 .app-shell {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;

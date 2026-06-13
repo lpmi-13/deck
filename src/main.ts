@@ -113,8 +113,10 @@ syncUiToGame();
 render();
 
 function render(): void {
+  const focusSnapshot = captureFocus();
+
   app.innerHTML = `
-    <main class="app-shell">
+    <div class="app-shell">
       <header class="topbar">
         <div class="brand">
           <img class="brand-logo" src="${logoUrl}" alt="" />
@@ -124,19 +126,28 @@ function render(): void {
           </div>
         </div>
         <div class="topbar-actions">
-          <button class="secondary" data-action="toggle-multiplayer" type="button">
+          <button
+            class="secondary"
+            data-action="toggle-multiplayer"
+            type="button"
+            aria-expanded="${ui.multiplayer.open ? "true" : "false"}"
+            aria-controls="multiplayer-panel"
+          >
             ${ui.multiplayer.open ? "Hide P2P" : "P2P"}
           </button>
           ${ui.game ? '<button class="secondary" data-action="show-setup" type="button">New Game</button>' : ""}
         </div>
       </header>
-      ${ui.error ? `<div class="notice error">${escapeHtml(ui.error)}</div>` : ""}
-      ${ui.game ? renderGame(ui.game) : renderSetup()}
-      ${ui.multiplayer.open ? renderMultiplayerPanel() : ""}
-    </main>
+      <main>
+        ${ui.error ? `<div class="notice error" role="alert">${escapeHtml(ui.error)}</div>` : ""}
+        ${ui.game ? renderGame(ui.game) : renderSetup()}
+        ${ui.multiplayer.open ? renderMultiplayerPanel() : ""}
+      </main>
+    </div>
   `;
 
   bindEvents();
+  restoreFocus(focusSnapshot);
 }
 
 function renderSetup(): string {
@@ -214,9 +225,10 @@ function renderDraftPlayer(player: DraftPlayer, index: number): string {
         data-player-id="${player.id}"
         type="button"
         title="Remove player"
+        aria-label="Remove player ${index + 1}"
         ${canRemove ? "" : "disabled"}
       >
-        &times;
+        <span aria-hidden="true">&times;</span>
       </button>
     </div>
   `;
@@ -442,7 +454,7 @@ function renderSubmission(submission: Submission | undefined, originalIndex: num
       <div class="submission-answers">
         ${submission.cards.map((card) => `<p>${escapeHtml(card.text)}</p>`).join("")}
       </div>
-      <button class="primary" data-action="pick-winner" data-submission-index="${originalIndex}" type="button">Pick Winner</button>
+      <button class="primary" data-action="pick-winner" data-submission-index="${originalIndex}" type="button" aria-label="Pick winner: submission ${displayIndex + 1}">Pick Winner</button>
     </article>
   `;
 }
@@ -479,18 +491,19 @@ function renderGameOver(game: GameState): string {
 
 function renderMultiplayerPanel(): string {
   return `
-    <section class="multiplayer-panel">
+    <section class="multiplayer-panel" id="multiplayer-panel" aria-labelledby="multiplayer-heading">
       <div class="section-heading">
-        <h2>Peer Connection</h2>
+        <h2 id="multiplayer-heading">Peer Connection</h2>
         <p>${renderMultiplayerStatus()}</p>
       </div>
 
-      <div class="role-tabs" role="tablist">
+      <div class="role-tabs" role="group" aria-label="Connection role">
         <button
           class="secondary ${ui.multiplayer.role === "host" ? "is-active" : ""}"
           data-action="set-multiplayer-role"
           data-role="host"
           type="button"
+          aria-pressed="${ui.multiplayer.role === "host" ? "true" : "false"}"
         >
           Host
         </button>
@@ -499,6 +512,7 @@ function renderMultiplayerPanel(): string {
           data-action="set-multiplayer-role"
           data-role="guest"
           type="button"
+          aria-pressed="${ui.multiplayer.role === "guest" ? "true" : "false"}"
         >
           Guest
         </button>
@@ -548,13 +562,13 @@ function renderHostPeerCard(peer: HostPeerUi): string {
       </div>
       <div class="signal-grid">
         <div class="signal-field">
-          <div class="field-label">Host offer</div>
-          <textarea readonly name="hostLocalSignal">${escapeHtml(peer.localSignal)}</textarea>
+          <div class="field-label" id="host-offer-label-${peer.id}">Host offer</div>
+          <textarea readonly name="hostLocalSignal" aria-labelledby="host-offer-label-${peer.id}">${escapeHtml(peer.localSignal)}</textarea>
           <button class="secondary" data-action="copy-local-signal" data-peer-id="${peer.id}" type="button" ${peer.localSignal ? "" : "disabled"}>Copy Offer</button>
         </div>
         <div class="signal-field">
-          <div class="field-label">Guest answer</div>
-          <textarea name="hostRemoteSignal" data-peer-id="${peer.id}">${escapeHtml(peer.remoteSignalInput)}</textarea>
+          <div class="field-label" id="guest-answer-label-${peer.id}">Guest answer</div>
+          <textarea name="hostRemoteSignal" data-peer-id="${peer.id}" aria-labelledby="guest-answer-label-${peer.id}">${escapeHtml(peer.remoteSignalInput)}</textarea>
           <button class="primary" data-action="accept-guest-answer" data-peer-id="${peer.id}" type="button">Accept Answer</button>
         </div>
       </div>
@@ -577,13 +591,13 @@ function renderGuestSignaling(): string {
   return `
     <div class="signal-grid">
       <div class="signal-field">
-        <div class="field-label">Host offer</div>
-        <textarea name="remoteSignal">${escapeHtml(ui.multiplayer.remoteSignalInput)}</textarea>
+        <div class="field-label" id="guest-host-offer-label">Host offer</div>
+        <textarea name="remoteSignal" aria-labelledby="guest-host-offer-label">${escapeHtml(ui.multiplayer.remoteSignalInput)}</textarea>
         <button class="primary" data-action="create-guest-answer" type="button">Create Answer</button>
       </div>
       <div class="signal-field">
-        <div class="field-label">Guest answer</div>
-        <textarea readonly name="localSignal">${escapeHtml(ui.multiplayer.localSignal)}</textarea>
+        <div class="field-label" id="guest-local-answer-label">Guest answer</div>
+        <textarea readonly name="localSignal" aria-labelledby="guest-local-answer-label">${escapeHtml(ui.multiplayer.localSignal)}</textarea>
         <button class="secondary" data-action="copy-local-signal" type="button" ${ui.multiplayer.localSignal ? "" : "disabled"}>Copy</button>
       </div>
     </div>
@@ -736,7 +750,7 @@ function renderRemotePlayerAction(view: PlayerViewPayload): string {
                 <div class="submission-answers">
                   ${submission.cards.map((card) => `<p>${escapeHtml(card.text)}</p>`).join("")}
                 </div>
-                <button class="primary" data-action="remote-pick-winner" data-submission-index="${submission.originalIndex}" type="button">Pick Winner</button>
+                <button class="primary" data-action="remote-pick-winner" data-submission-index="${submission.originalIndex}" type="button" aria-label="Pick winner: submission ${submission.displayIndex + 1}">Pick Winner</button>
               </article>
             `
           )
@@ -1476,6 +1490,88 @@ function playerById(game: GameState, playerId: string): Player {
     throw new Error("Player not found.");
   }
   return player;
+}
+
+const FOCUS_MATCH_ATTRIBUTES = [
+  "name",
+  "type",
+  "value",
+  "data-action",
+  "data-role",
+  "data-peer-id",
+  "data-player-id",
+  "data-submission-index"
+] as const;
+
+interface FocusSnapshot {
+  tag: string;
+  attributes: Record<string, string | null>;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+}
+
+// The whole app re-renders by replacing innerHTML, which drops keyboard focus to
+// the document body. Capture enough of the focused control to find its equivalent
+// after the re-render so keyboard and screen-reader users keep their place.
+function captureFocus(): FocusSnapshot | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !app.contains(active)) {
+    return null;
+  }
+
+  const attributes: Record<string, string | null> = {};
+  for (const attribute of FOCUS_MATCH_ATTRIBUTES) {
+    attributes[attribute] = active.getAttribute(attribute);
+  }
+
+  let selectionStart: number | null = null;
+  let selectionEnd: number | null = null;
+  if (active instanceof HTMLTextAreaElement) {
+    selectionStart = active.selectionStart;
+    selectionEnd = active.selectionEnd;
+  } else if (active instanceof HTMLInputElement) {
+    try {
+      selectionStart = active.selectionStart;
+      selectionEnd = active.selectionEnd;
+    } catch {
+      // Inputs such as type="number" do not expose a text selection range.
+    }
+  }
+
+  return { tag: active.tagName, attributes, selectionStart, selectionEnd };
+}
+
+function restoreFocus(snapshot: FocusSnapshot | null): void {
+  if (!snapshot) {
+    return;
+  }
+
+  const candidates = app.querySelectorAll<HTMLElement>("button, input, select, textarea");
+  for (const candidate of candidates) {
+    if (candidate.tagName !== snapshot.tag) {
+      continue;
+    }
+
+    const matches = FOCUS_MATCH_ATTRIBUTES.every(
+      (attribute) => candidate.getAttribute(attribute) === snapshot.attributes[attribute]
+    );
+    if (!matches) {
+      continue;
+    }
+
+    candidate.focus({ preventScroll: true });
+    if (
+      snapshot.selectionStart !== null &&
+      (candidate instanceof HTMLInputElement || candidate instanceof HTMLTextAreaElement)
+    ) {
+      try {
+        candidate.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd ?? snapshot.selectionStart);
+      } catch {
+        // Some input types do not support setSelectionRange; focus alone is enough.
+      }
+    }
+    return;
+  }
 }
 
 function escapeHtml(value: string): string {
