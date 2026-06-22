@@ -552,7 +552,31 @@ function renderMultiplayerStatus(): string {
     return `Host: <strong class="status-pill status-${connectedCount > 0 ? "connected" : "idle"}">${connectedCount}/${totalCount} guests connected</strong>`;
   }
 
-  return `Status: <strong class="status-pill status-${ui.multiplayer.status}">${ui.multiplayer.status}</strong>`;
+  return `Status: <strong class="status-pill status-${ui.multiplayer.status}">${escapeHtml(connectionStatusLabel(ui.multiplayer.status, "guest"))}</strong>`;
+}
+
+// Plain-language status for the pills. The "waiting" phase means different things
+// to each side (host waits for the guest's answer; guest waits for the host to
+// accept), so the role disambiguates it.
+function connectionStatusLabel(status: ConnectionStatus, role: "host" | "guest"): string {
+  switch (status) {
+    case "idle":
+      return role === "host" ? "starting" : "not connected";
+    case "gathering":
+      return "preparing";
+    case "waiting":
+      return role === "host" ? "waiting for guest" : "waiting for host";
+    case "connecting":
+      return "connecting";
+    case "connected":
+      return "connected";
+    case "disconnected":
+      return "disconnected";
+    case "failed":
+      return "connection failed";
+    case "closed":
+      return "closed";
+  }
 }
 
 function renderHostSignaling(): string {
@@ -572,36 +596,15 @@ function renderHostSignaling(): string {
 }
 
 function renderHostPeerCard(peer: HostPeerUi): string {
-  const peerPlayer = ui.game?.players.find((player) => player.id === peer.peerPlayerId);
   return `
     <article class="host-peer-card">
       <div class="section-heading">
         <h3>${escapeHtml(peer.label)}</h3>
-        <p>Status: <strong class="status-pill status-${peer.status}">${peer.status}</strong></p>
+        <p>Status: <strong class="status-pill status-${peer.status}">${escapeHtml(connectionStatusLabel(peer.status, "host"))}</strong></p>
       </div>
-      <div class="signal-grid">
-        <div class="signal-field">
-          <div class="field-label" id="host-offer-label-${peer.id}">Host offer</div>
-          <p class="signal-hint">Show this code to the guest, or copy the text.</p>
-          ${peer.localQr ? `<img class="signal-qr" src="${peer.localQr}" alt="QR code with the host offer for ${escapeAttribute(peer.label)}" />` : ""}
-          <textarea readonly name="hostLocalSignal" aria-labelledby="host-offer-label-${peer.id}">${escapeHtml(peer.localSignal)}</textarea>
-          <button class="secondary" data-action="copy-local-signal" data-peer-id="${peer.id}" type="button" ${peer.localSignal ? "" : "disabled"}>Copy Offer</button>
-        </div>
-        <div class="signal-field">
-          <div class="field-label" id="guest-answer-label-${peer.id}">Guest answer</div>
-          <p class="signal-hint">Scan the guest's answer code, or paste it below.</p>
-          <button class="primary" data-action="scan-guest-answer" data-peer-id="${peer.id}" type="button">Scan Guest Answer</button>
-          <textarea name="hostRemoteSignal" data-peer-id="${peer.id}" aria-labelledby="guest-answer-label-${peer.id}">${escapeHtml(peer.remoteSignalInput)}</textarea>
-          <button class="secondary" data-action="accept-guest-answer" data-peer-id="${peer.id}" type="button">Accept Pasted Answer</button>
-        </div>
-      </div>
-      <div class="remote-game-grid">
-        <span>Player</span>
-        <strong>${escapeHtml(peerPlayer?.name ?? "Not selected")}</strong>
-      </div>
+      ${renderHostPeerBody(peer)}
       <div class="button-row">
-        <button class="secondary" data-action="send-player-view" data-peer-id="${peer.id}" type="button" ${peer.status === "connected" && ui.game && peer.peerPlayerId ? "" : "disabled"}>Send Player View</button>
-        <button class="secondary" data-action="close-peer" data-peer-id="${peer.id}" type="button">Close</button>
+        <button class="secondary" data-action="close-peer" data-peer-id="${peer.id}" type="button">${peer.status === "connected" ? "Disconnect Guest" : "Remove"}</button>
       </div>
       <div class="message-log" aria-live="polite">
         ${peer.log.map((entry) => `<div>${escapeHtml(entry)}</div>`).join("")}
@@ -610,22 +613,121 @@ function renderHostPeerCard(peer: HostPeerUi): string {
   `;
 }
 
-function renderGuestSignaling(): string {
+// A guest-connection card's body depends on where that connection is: still
+// exchanging signals, linking up, live, or finished. Only the action that makes
+// sense right now is shown, so e.g. the answer controls disappear once an answer
+// has been accepted (which is also what prevents re-applying it).
+function renderHostPeerBody(peer: HostPeerUi): string {
+  if (peer.status === "connected") {
+    return renderHostPeerConnected(peer);
+  }
+
+  if (peer.status === "connecting") {
+    return `<p class="muted-copy">Connecting to the guest… keep this panel open until it links up.</p>`;
+  }
+
+  if (peer.status === "disconnected" || peer.status === "failed" || peer.status === "closed") {
+    return `<p class="muted-copy">This guest connection ended. Remove it and add a new guest to reconnect.</p>`;
+  }
+
+  return renderHostPeerExchange(peer);
+}
+
+function renderHostPeerExchange(peer: HostPeerUi): string {
+  if (!peer.localSignal) {
+    return `<p class="muted-copy">Preparing the invite code…</p>`;
+  }
+
+  const hasPastedAnswer = peer.remoteSignalInput.trim().length > 0;
   return `
-    <div class="signal-grid">
-      <div class="signal-field">
-        <div class="field-label" id="guest-host-offer-label">Host offer</div>
-        <p class="signal-hint">Scan the host's code, or paste it and create an answer.</p>
-        <button class="primary" data-action="scan-host-offer" type="button">Scan Host Offer</button>
-        <textarea name="remoteSignal" aria-labelledby="guest-host-offer-label">${escapeHtml(ui.multiplayer.remoteSignalInput)}</textarea>
-        <button class="secondary" data-action="create-guest-answer" type="button">Create Answer From Text</button>
-      </div>
-      <div class="signal-field">
-        <div class="field-label" id="guest-local-answer-label">Guest answer</div>
-        <p class="signal-hint">Show this code to the host once it appears.</p>
-        ${ui.multiplayer.localQr ? `<img class="signal-qr" src="${ui.multiplayer.localQr}" alt="QR code with your answer for the host to scan" />` : ""}
-        <textarea readonly name="localSignal" aria-labelledby="guest-local-answer-label">${escapeHtml(ui.multiplayer.localSignal)}</textarea>
-        <button class="secondary" data-action="copy-local-signal" type="button" ${ui.multiplayer.localSignal ? "" : "disabled"}>Copy</button>
+    <div class="signal-field">
+      <div class="field-label" id="host-offer-label-${peer.id}">Step 1 · Show this invite to the guest</div>
+      <p class="signal-hint">The guest scans this code (or pastes the text) to make their answer.</p>
+      ${peer.localQr ? `<img class="signal-qr" src="${peer.localQr}" alt="QR code with the host offer for ${escapeAttribute(peer.label)}" />` : ""}
+      <textarea readonly name="hostLocalSignal" aria-labelledby="host-offer-label-${peer.id}">${escapeHtml(peer.localSignal)}</textarea>
+      <button class="secondary" data-action="copy-local-signal" data-peer-id="${peer.id}" type="button">Copy Invite</button>
+    </div>
+    <div class="signal-field">
+      <div class="field-label" id="guest-answer-label-${peer.id}">Step 2 · Scan the guest's answer</div>
+      <p class="signal-hint">When the guest shows their answer code, scan it to connect.</p>
+      <button class="primary" data-action="scan-guest-answer" data-peer-id="${peer.id}" type="button">Scan Guest Answer</button>
+      <details class="signal-fallback"${hasPastedAnswer ? " open" : ""}>
+        <summary>No camera? Paste the answer instead</summary>
+        <textarea name="hostRemoteSignal" data-peer-id="${peer.id}" aria-labelledby="guest-answer-label-${peer.id}" placeholder="Paste the guest's answer code">${escapeHtml(peer.remoteSignalInput)}</textarea>
+        <button class="secondary" data-action="accept-guest-answer" data-peer-id="${peer.id}" type="button" ${hasPastedAnswer ? "" : "disabled"}>Accept Pasted Answer</button>
+      </details>
+    </div>
+  `;
+}
+
+function renderHostPeerConnected(peer: HostPeerUi): string {
+  const peerPlayer = ui.game?.players.find((player) => player.id === peer.peerPlayerId);
+  const canSendView = Boolean(ui.game) && Boolean(peer.peerPlayerId);
+  return `
+    <div class="remote-game-grid">
+      <span>Player</span>
+      <strong>${escapeHtml(peerPlayer?.name ?? "Choosing…")}</strong>
+    </div>
+    ${peer.peerPlayerId ? "" : '<p class="signal-hint">The guest picks which player they are from their own device.</p>'}
+    <button class="secondary" data-action="send-player-view" data-peer-id="${peer.id}" type="button" ${canSendView ? "" : "disabled"}>Send Player View</button>
+  `;
+}
+
+function renderGuestSignaling(): string {
+  const status = ui.multiplayer.status;
+
+  if (status === "connected") {
+    return `<p class="muted-copy">Connected to the host. Choose your player below to start playing.</p>`;
+  }
+
+  if (status === "disconnected" || status === "failed" || status === "closed") {
+    return `
+      <p class="muted-copy">The host connection ended. Scan a fresh host invite to reconnect.</p>
+      ${renderGuestScanControls()}
+    `;
+  }
+
+  // Once an answer has been generated, the only thing left to do is show it to
+  // the host — so surface that and tuck re-scanning behind "Start over".
+  if (ui.multiplayer.localSignal) {
+    return renderGuestAnswerReady();
+  }
+
+  // Answer is still being built (the QR/text appears a moment after the status
+  // flips to "waiting"), so keep showing progress rather than the scan controls.
+  if (status === "connecting" || status === "gathering" || status === "waiting") {
+    return `<p class="muted-copy">Creating your answer…</p>`;
+  }
+
+  return renderGuestScanControls();
+}
+
+function renderGuestScanControls(): string {
+  const hasPastedOffer = ui.multiplayer.remoteSignalInput.trim().length > 0;
+  return `
+    <div class="signal-field">
+      <div class="field-label" id="guest-host-offer-label">Scan the host's invite</div>
+      <p class="signal-hint">Scan the code the host shows you to join their game.</p>
+      <button class="primary" data-action="scan-host-offer" type="button">Scan Host Invite</button>
+      <details class="signal-fallback"${hasPastedOffer ? " open" : ""}>
+        <summary>No camera? Paste the invite instead</summary>
+        <textarea name="remoteSignal" aria-labelledby="guest-host-offer-label" placeholder="Paste the host's invite code">${escapeHtml(ui.multiplayer.remoteSignalInput)}</textarea>
+        <button class="secondary" data-action="create-guest-answer" type="button" ${hasPastedOffer ? "" : "disabled"}>Create Answer From Text</button>
+      </details>
+    </div>
+  `;
+}
+
+function renderGuestAnswerReady(): string {
+  return `
+    <div class="signal-field">
+      <div class="field-label" id="guest-local-answer-label">Show this answer to the host</div>
+      <p class="signal-hint">The host scans this code to finish connecting. Keep this screen up.</p>
+      ${ui.multiplayer.localQr ? `<img class="signal-qr" src="${ui.multiplayer.localQr}" alt="QR code with your answer for the host to scan" />` : ""}
+      <textarea readonly name="localSignal" aria-labelledby="guest-local-answer-label">${escapeHtml(ui.multiplayer.localSignal)}</textarea>
+      <div class="button-row">
+        <button class="secondary" data-action="copy-local-signal" type="button">Copy Answer</button>
+        <button class="secondary" data-action="close-peer" type="button">Start Over</button>
       </div>
     </div>
   `;
@@ -970,7 +1072,9 @@ function bindEvents(): void {
   });
 
   app.querySelector<HTMLTextAreaElement>('textarea[name="remoteSignal"]')?.addEventListener("input", (event) => {
-    ui.multiplayer.remoteSignalInput = (event.currentTarget as HTMLTextAreaElement).value;
+    const value = (event.currentTarget as HTMLTextAreaElement).value;
+    ui.multiplayer.remoteSignalInput = value;
+    setControlEnabled('button[data-action="create-guest-answer"]', value.trim().length > 0);
   });
 
   app.querySelectorAll<HTMLTextAreaElement>('textarea[name="hostRemoteSignal"]').forEach((textarea) => {
@@ -979,6 +1083,10 @@ function bindEvents(): void {
       if (peer) {
         peer.remoteSignalInput = textarea.value;
       }
+      setControlEnabled(
+        `button[data-action="accept-guest-answer"][data-peer-id="${textarea.dataset.peerId ?? ""}"]`,
+        textarea.value.trim().length > 0
+      );
     });
   });
 
@@ -1694,6 +1802,13 @@ function currentViewKey(): string {
 function focusViewHeading(): void {
   const heading = app.querySelector<HTMLElement>("[data-view-heading]");
   heading?.focus();
+}
+
+// Toggle a control's disabled state in place. Used by the paste boxes so their
+// submit button tracks whether there is anything to submit without re-rendering
+// (a full render would disturb the caret while the user is typing).
+function setControlEnabled(selector: string, enabled: boolean): void {
+  app.querySelector<HTMLButtonElement>(selector)?.toggleAttribute("disabled", !enabled);
 }
 
 function escapeHtml(value: string): string {

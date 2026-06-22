@@ -61,8 +61,19 @@ export class WebRtcPeer implements MultiplayerTransport {
       throw new Error("Paste a guest answer signal.");
     }
 
-    this.setStatus("connecting");
+    // A remote answer is only valid while we are still waiting for one
+    // ("have-local-offer"). Once it has been applied the state moves to
+    // "stable", so re-applying it throws "Called in wrong state: stable".
+    // This happens easily on the host card, where scanning an answer also
+    // fills the paste box: tapping "Accept Pasted Answer" (or scanning again)
+    // would otherwise apply the same answer twice. Treat the repeat as a
+    // no-op so the established connection is left intact.
+    if (this.connection.signalingState !== "have-local-offer") {
+      return;
+    }
+
     await this.connection.setRemoteDescription(answer.description);
+    this.setStatus("connecting");
   }
 
   async createGuestAnswer(encodedOffer: string): Promise<string> {
