@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebRtcPeer } from "./webrtc";
 import { createSignal, encodeSignal } from "./signal";
+import type { ConnectionStatus } from "./transport";
 
 // Minimal RTCPeerConnection stand-in that mirrors the browser's signaling-state
 // machine for the transition this suite exercises: a remote answer is only
@@ -32,9 +33,10 @@ afterEach(() => {
   globalThis.RTCPeerConnection = originalRtcPeerConnection;
 });
 
-function createPeer(): { peer: WebRtcPeer; connection: FakeRtcPeerConnection } {
-  const peer = new WebRtcPeer({ onStatusChange: vi.fn(), onMessage: vi.fn() });
-  return { peer, connection: peer.connection as unknown as FakeRtcPeerConnection };
+function createPeer(): { peer: WebRtcPeer; connection: FakeRtcPeerConnection; statuses: ConnectionStatus[] } {
+  const statuses: ConnectionStatus[] = [];
+  const peer = new WebRtcPeer({ onStatusChange: (status) => statuses.push(status), onMessage: vi.fn() });
+  return { peer, connection: peer.connection as unknown as FakeRtcPeerConnection, statuses };
 }
 
 const encodedAnswer = encodeSignal(createSignal("guest-answer", { type: "answer", sdp: "v=0\r\ns=answer\r\n" }));
@@ -59,6 +61,18 @@ describe("WebRtcPeer.acceptGuestAnswer", () => {
     await expect(peer.acceptGuestAnswer(encodedAnswer)).resolves.toBeUndefined();
 
     expect(connection.setRemoteDescription).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report a connection while applying the answer is still failing", async () => {
+    const { peer, connection, statuses } = createPeer();
+    connection.setRemoteDescription = vi.fn(async () => {
+      throw new Error("network blip");
+    });
+
+    await expect(peer.acceptGuestAnswer(encodedAnswer)).rejects.toThrow("network blip");
+    // Status must stay on the signalling screen so the host can retry, rather
+    // than jumping to "connecting" for an answer that never applied.
+    expect(statuses).not.toContain("connecting");
   });
 
   it("rejects a signal that is not a guest answer", async () => {

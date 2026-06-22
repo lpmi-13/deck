@@ -72,8 +72,8 @@ export class WebRtcPeer implements MultiplayerTransport {
       return;
     }
 
-    this.setStatus("connecting");
     await this.connection.setRemoteDescription(answer.description);
+    this.setStatus("connecting");
   }
 
   async createGuestAnswer(encodedOffer: string): Promise<string> {

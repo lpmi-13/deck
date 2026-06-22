@@ -505,12 +505,6 @@ textarea {
   background: #18211f;
 }
 
-.signal-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
 .host-peers {
   display: grid;
   gap: 14px;
@@ -533,6 +527,21 @@ textarea {
 .signal-field {
   display: grid;
   gap: 10px;
+}
+
+.signal-fallback > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #42504b;
+}
+
+.signal-fallback > textarea {
+  margin-top: 10px;
+}
+
+.signal-fallback > button {
+  margin-top: 10px;
 }
 
 .field-label {
@@ -702,7 +711,6 @@ textarea {
 
   .setup-layout,
   .game-layout,
-  .signal-grid,
   .mode-options,
   .guest-selector {
     grid-template-columns: 1fr;
